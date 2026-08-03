@@ -42,8 +42,8 @@ without loading into context, which is the right home for anything deterministic
 ## Install
 
 ```bash
-git clone https://github.com/<your-username>/flutter-claude-skills.git
-cd flutter-claude-skills
+https://github.com/draz26648/flutter_claude_skills
+cd flutter_claude_skills
 ./install.sh --project ~/path/to/your/flutter-app
 ```
 
