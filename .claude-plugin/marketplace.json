@@ -1,0 +1,39 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "draz-flutter",
+  "description": "Agent Skills for production Flutter work: design fidelity, architecture, state management, accessibility, and a pre-commit review gate.",
+  "owner": {
+    "name": "Mohamed Draz",
+    "url": "https://github.com/draz26648"
+  },
+  "plugins": [
+    {
+      "name": "flutter-design-fidelity",
+      "source": "./plugins/flutter-design-fidelity",
+      "description": "Keeps Flutter implementation matching the design. Enforces design tokens over hardcoded values, translates Figma Auto Layout into Row and Column rather than Stack, runs a screenshot diff loop instead of accepting the first render, and freezes the result in golden tests.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Mohamed Draz",
+        "url": "https://github.com/draz26648"
+      },
+      "homepage": "https://github.com/draz26648/flutter_claude_skills",
+      "license": "MIT",
+      "category": "design",
+      "keywords": ["flutter", "figma", "design-tokens", "golden-tests"]
+    },
+    {
+      "name": "flutter-code-quality",
+      "source": "./plugins/flutter-code-quality",
+      "description": "Flutter architecture and quality conventions. Feature-first layering with a pure Dart domain, Cubit and Bloc emission and rebuild rules, responsive layout, accessibility and RTL requirements that design files never specify, performance rules, and a read-only pre-commit review gate.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Mohamed Draz",
+        "url": "https://github.com/draz26648"
+      },
+      "homepage": "https://github.com/draz26648/flutter_claude_skills",
+      "license": "MIT",
+      "category": "development",
+      "keywords": ["flutter", "bloc", "clean-architecture", "accessibility", "rtl"]
+    }
+  ]
+}
