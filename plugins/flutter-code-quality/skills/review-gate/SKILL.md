@@ -8,51 +8,92 @@ allowed-tools: Read, Grep, Glob, Bash
 
 This skill audits and reports. It does not fix. That restriction is deliberate: a gate
 with write access eventually satisfies its own checks by deleting the assertion that
-failed, and a quality gate that can edit code to make itself pass is not a gate.
+failed, and a quality gate that can edit code to make itself pass is not a gate. `Edit`
+and `Write` are absent from `allowed-tools` for that reason — do not reach for them from
+inside this skill, and do not "helpfully" fix a finding on the way past.
 
 Report findings, then let the developer decide.
 
 ## Running it
 
+Run from the **project root** — the script reads `pubspec.yaml` and `git diff` there.
+
 ```bash
-bash "$SKILL_DIR/scripts/check.sh"
+bash "${CLAUDE_PLUGIN_ROOT}/skills/review-gate/scripts/check.sh"
 ```
 
-Resolve `$SKILL_DIR` to the absolute path of the directory this SKILL.md was read from.
-When installed as a plugin the skill lives under `~/.claude/plugins/cache/` rather than
-in the project, so a bare relative path will not find the script.
+`CLAUDE_PLUGIN_ROOT` is set by Claude Code and expands on its own; it does not need
+resolving by hand. If the skill was vendored into the project rather than installed as a
+plugin, that variable is unset — use the path it was copied to instead:
 
-Run it from the project root — it inspects `git diff` against HEAD to scope the audit to
-changed files. The script exits non-zero on the first hard failure. Read its output
-rather than re-running the individual commands.
+```bash
+bash .claude/skills/review-gate/scripts/check.sh
+```
+
+Options: `--skip-tests` when you only want lint feedback, `--all` to audit all of `lib/`
+and `test/` instead of just what changed.
+
+Exit codes: `0` nothing blocking, `1` at least one blocking finding, `2` the gate could
+not run. **A `2` is not a pass.** It means a precondition failed or a check itself broke,
+and the result carries no information about the code.
+
+Read the script's output rather than re-running the individual commands — it already
+separates blocking from non-blocking, and re-running by hand loses that.
 
 ## What is checked
 
-**Formatting.** `dart format --set-exit-if-changed .` — unformatted code produces noisy
-diffs that hide real changes in review.
+**Formatting.** `dart format --set-exit-if-changed` over the files in scope. Unformatted
+code produces noisy diffs that hide real changes in review.
 
-**Static analysis.** `flutter analyze --fatal-infos`. Infos are fatal on purpose;
-tolerated infos accumulate until nobody reads the output at all.
+**Static analysis.** `flutter analyze --fatal-infos`, whole project. Infos are fatal on
+purpose; tolerated infos accumulate until nobody reads the output at all. This one is
+deliberately not scoped to the diff — a change in one file breaks analysis in another,
+and scoping to the diff hides exactly that.
 
-**Forbidden patterns.** Grep for:
+**Forbidden patterns.** Blocking:
 
 - `print(` — use a logger. Print statements ship to production and leak data.
-- `!` force-unwrap on a nullable — every one is a potential crash. Rare exceptions are
-  acceptable with a comment explaining why null is impossible.
-- `TODO` or `FIXME` without a ticket reference. An untracked TODO is a note to nobody.
-- `debugPrint`, `dump`, or commented-out code blocks.
-- Hardcoded colors and numeric `EdgeInsets` in widget files — see the design-tokens skill.
+- Hardcoded colors — `Color(0x...)` or `Colors.<name>` — see the design-tokens skill.
+- Numeric `EdgeInsets` — see the design-tokens skill.
 - `EdgeInsets.only(left:` or `right:` — see the a11y-and-rtl skill.
-- Hardcoded user-facing strings outside ARB files.
-- API keys, tokens, or URLs with credentials.
+- API keys, tokens, or URLs with embedded credentials.
 
-**Tests.** `flutter test` passes. New public methods on a Cubit have tests covering both
-the success and the failure path. Changed widgets have current goldens, and any changed
-golden PNG has been visually reviewed — flag changed goldens explicitly in the report,
-since they are the easiest thing to approve without looking.
+Non-blocking:
 
-**Dependencies.** No new package added without a note on why. Check whether the
-functionality already exists in the codebase or in the SDK first.
+- `debugPrint(` in shipped code.
+- `TODO` or `FIXME` without a ticket reference. `TODO(WAL-42)` passes; a bare `TODO` does
+  not. An untracked TODO is a note to nobody.
+- Commented-out code.
+- `BorderRadius.circular(<number>)`.
+- `!` force-unwrap on a nullable — every one is a potential crash. Acceptable with a
+  comment explaining why null is impossible, which is why this warns rather than blocks.
+- Hardcoded user-facing strings in `Text(...)` — see a11y-and-rtl.
+
+**Where these are not enforced.** Generated files (`*.g.dart`, `*.freezed.dart`,
+`*.mocks.dart`, and similar), tests, and the token layer (`theme/`, `tokens/`,
+`design_system/`, `app_colors.dart`, `app_theme.dart`) are excluded from the literal-value
+checks. Raw colors and numbers are exactly what belongs in the token file. A gate that
+fails on correct code gets switched off, so the carve-out is load-bearing rather than a
+convenience.
+
+**Tests.** `flutter test` passes, and failures are named in the report. New public methods
+on a Cubit have tests covering both the success and the failure path. Changed golden PNGs
+are flagged explicitly, since they are the easiest thing to approve without looking.
+
+**Dependencies.** New entries in `pubspec.yaml` are flagged. Each needs a note on why, and
+a check that the functionality does not already exist in the codebase or the SDK.
+
+## Judgement the script cannot make
+
+The script finds mechanical violations. These need reading the diff:
+
+- Whether a new Cubit method's tests cover the failure path, not just that tests exist.
+- Whether a changed golden was actually reviewed, or just regenerated until green.
+- Whether a force-unwrap's justifying comment is true.
+- Whether a new dependency was necessary.
+
+Report on these alongside the script's output. They are the findings a human reviewer
+would have caught and the script never will.
 
 ## Report format
 
@@ -74,6 +115,7 @@ thorough. A gate that always reports problems teaches people to ignore it.
 
 ## Scope
 
-Review only what changed. Run `git diff --stat` first and confine the audit to those
-files. A report covering the whole codebase buries the three findings that relate to
-the current change.
+The pattern checks confine themselves to Dart files changed against `HEAD`, so the report
+tracks the current change rather than the whole codebase. Analysis and tests are
+whole-project because they have to be. When the report cites a file the change did not
+touch, that is analysis or tests talking, and it still needs fixing.

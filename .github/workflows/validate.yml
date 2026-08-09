@@ -1,0 +1,66 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  structure:
+    name: Skill and manifest structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate skills, manifests and marketplace
+        run: python3 scripts/validate.py
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Syntax check
+        run: |
+          bash -n install.sh
+          bash -n plugins/flutter-code-quality/skills/review-gate/scripts/check.sh
+      - name: shellcheck
+        run: |
+          shellcheck --severity=warning \
+            install.sh \
+            plugins/flutter-code-quality/skills/review-gate/scripts/check.sh
+
+  python:
+    name: Python scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tooling
+        run: pip install ruff pillow numpy
+      - name: Lint
+        run: ruff check scripts plugins
+      - name: Compile
+        run: |
+          python3 -m py_compile scripts/validate.py
+          python3 -m py_compile plugins/flutter-design-fidelity/skills/visual-verification/scripts/compare.py
+      - name: compare.py behaves
+        run: python3 scripts/test_compare.py
+
+  gate:
+    name: review-gate self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Run the gate against its fixture
+        run: bash scripts/test_check_sh.sh

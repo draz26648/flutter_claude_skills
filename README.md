@@ -438,13 +438,31 @@ the difference.
 plugins/
   flutter-design-fidelity/
     .claude-plugin/plugin.json
-    skills/<name>/SKILL.md
+    skills/design-tokens/SKILL.md
+    skills/design-tokens/references/theme-extension-template.dart
+    skills/figma-to-widget/SKILL.md
+    skills/visual-verification/SKILL.md
+    skills/visual-verification/scripts/compare.py
+    skills/golden-tests/SKILL.md
   flutter-code-quality/
     .claude-plugin/plugin.json
-    skills/<name>/SKILL.md
+    skills/architecture/SKILL.md
+    skills/state-management/SKILL.md
+    skills/responsive-adaptive/SKILL.md
+    skills/a11y-and-rtl/SKILL.md
+    skills/performance/SKILL.md
+    skills/review-gate/SKILL.md
+    skills/review-gate/scripts/check.sh
 install.sh                           for vendoring into a project instead
-article/                             the writeup these skills came from
 ```
+
+`plugins/` is the only source of truth. There is deliberately no top-level `skills/`
+mirror — it existed before v1.0.0, drifted behind the plugin copies within a handful of
+commits, and was removed. Edit skills in `plugins/`; nothing else needs updating.
+
+Scripts inside a skill are addressed with `${CLAUDE_PLUGIN_ROOT}`, the environment
+variable Claude Code sets to the installed plugin's root. It expands on its own — a skill
+should never ask the model to work out its own path by hand.
 
 Validate before pushing:
 
