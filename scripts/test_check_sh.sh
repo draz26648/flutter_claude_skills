@@ -160,18 +160,59 @@ expect_exit "$BARE_CODE" 2 "exits 2 outside a Flutter project rather than report
 # ---------------------------------------------------------------- the original bug
 
 echo "== a broken check must fail loudly, never report ok =="
+#
+# grep implementations disagree about this exact pattern, which is why the original bug
+# survived so long. GNU grep prints a warning and exits 1, which is indistinguishable from
+# "no violations found". ugrep exits 2. A fix that only inspects the exit code catches the
+# second and silently passes the first, so run the canary under every grep on this machine.
 BROKEN="$WORK/broken.sh"
 python3 - "$GATE" "$BROKEN" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
 needle = 'check_pattern "no print() calls" block'
-inject = 'check_pattern "canary" block \\\n  \'TODO(?!\\()|FIXME\' \\\n  ""\n\n'
+inject = (
+    'check_pattern "canary" block \\\n'
+    "  'TODO(?!\\()|FIXME' \\\n"
+    '  "" \\\n'
+    '  "  // TODO untracked"\n\n'
+)
 assert needle in src, "anchor for the canary injection moved"
 open(sys.argv[2], 'w').write(src.replace(needle, inject + needle, 1))
 PY
-BROKEN_OUT="$(cd "$PROJ" && bash "$BROKEN" --skip-tests 2>&1)"
-expect_contains "$BROKEN_OUT" "check 'canary' could not run" "surfaces a malformed pattern"
-expect_absent   "$BROKEN_OUT" "ok: canary"                   "never reports ok for a check that errored"
+
+run_canary() {
+  local label="$1" extra_path="$2" out
+  if [ -n "$extra_path" ]; then
+    out="$(cd "$PROJ" && PATH="$extra_path:$PATH" bash "$BROKEN" --skip-tests 2>&1)"
+  else
+    out="$(cd "$PROJ" && bash "$BROKEN" --skip-tests 2>&1)"
+  fi
+  expect_contains "$out" "check 'canary' is broken" "[$label] surfaces a broken pattern"
+  expect_absent   "$out" "ok: canary"               "[$label] never reports ok for a broken check"
+}
+
+run_canary "default grep" ""
+
+# Homebrew keeps GNU grep out of the default PATH on macOS. If it is here, this is the
+# case CI hits, so exercise it locally too.
+GNU_GREP_DIR=/opt/homebrew/opt/grep/libexec/gnubin
+if [ -x "$GNU_GREP_DIR/grep" ]; then
+  run_canary "GNU grep" "$GNU_GREP_DIR"
+else
+  echo "  note: GNU grep not installed locally; CI covers that case"
+fi
+
+# Every real check must also declare a sample, or the self-test is vacuous.
+MISSING="$WORK/missing.sh"
+python3 - "$GATE" "$MISSING" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+needle = 'check_pattern "no print() calls" block'
+inject = 'check_pattern "sampleless" block \\\n  \'print\\(\' \\\n  ""\n\n'
+open(sys.argv[2], 'w').write(src.replace(needle, inject + needle, 1))
+PY
+MISSING_OUT="$(cd "$PROJ" && bash "$MISSING" --skip-tests 2>&1)"
+expect_contains "$MISSING_OUT" "no self-test sample was declared" "rejects a check with no sample"
 
 # ----------------------------------------------------------------
 

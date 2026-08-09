@@ -9,6 +9,22 @@ Versioning follows semver from the *consumer's* point of view. A check that star
 failing a project that previously passed is a breaking change, even though nothing about
 the project changed — the gate's verdict is the contract.
 
+## 2.0.1
+
+### Fixed
+
+- **The "a broken check fails loudly" guarantee only held on macOS.** 2.0.0 detected a
+  malformed pattern by testing for a grep exit code of 2 or higher. grep implementations
+  disagree: given a PCRE lookahead, ugrep exits 2, but GNU grep prints a warning and exits
+  1, which is indistinguishable from "no violations found". Since GNU grep is what Linux
+  CI runs, the case the guarantee existed for was still silently green. Every check now
+  declares a line its pattern is required to match, and a check that cannot find its own
+  known violation reports itself broken rather than `ok`. This is behaviour-based, so it
+  holds whatever grep is installed.
+
+  No check shipped in 2.0.0 was actually broken; this closes the hole that would have let
+  a future one hide. Caught by the canary test added in 2.0.0, running on Linux CI.
+
 ## 2.0.0
 
 Breaking, because upgrading changes the verdict you get on code you have already shipped.

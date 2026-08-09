@@ -90,20 +90,34 @@ EX_L10N='(^|/)(l10n|generated|intl)/'
 
 # ---------------------------------------------------------------- pattern engine
 
-# check_pattern <label> <block|warn> <ere-pattern> [exclusion-ere]
+# check_pattern <label> <block|warn> <ere-pattern> <exclusion-ere> <must-match-sample>
 #
-# Distinguishes grep's three exit states. Historically this function swallowed grep
-# errors with `|| true`, which meant a malformed pattern reported "ok" forever.
+# The sample is a line the pattern is required to match. A check that cannot find its own
+# known violation is broken, and says so instead of reporting "ok".
+#
+# Exit codes alone are not enough to detect a bad pattern, because grep implementations
+# disagree. Given the PCRE lookahead this script used to carry, GNU grep prints a warning
+# and exits 1 — indistinguishable from "no violations found" — while ugrep exits 2. Testing
+# only for exit >= 2 leaves the GNU case silently green, which is the majority of CI.
 check_pattern() {
-  local label="$1" severity="$2" pattern="$3" exclude="${4:-}"
+  local label="$1" severity="$2" pattern="$3" exclude="${4:-}" sample="${5:-}"
   local hits status errfile
+
+  if [ -z "$sample" ]; then
+    fail "check '$label' is broken: no self-test sample was declared for it"
+    return
+  fi
+  if ! printf '%s\n' "$sample" | grep -qE -- "$pattern" 2>/dev/null; then
+    fail "check '$label' is broken: its pattern does not match its own test sample"
+    return
+  fi
 
   errfile=$(mktemp) || die "mktemp failed"
   hits=$(grep -HnE -- "$pattern" "${FILES[@]}" 2>"$errfile")
   status=$?
 
   if [ "$status" -ge 2 ]; then
-    fail "check '$label' could not run — $(tr '\n' ' ' <"$errfile")"
+    fail "check '$label' is broken: $(tr '\n' ' ' <"$errfile")"
     rm -f "$errfile"
     return
   fi
@@ -162,53 +176,65 @@ section "Forbidden patterns"
 
 check_pattern "no print() calls" block \
   '(^|[^a-zA-Z0-9_.])print\(' \
-  "$EX_GENERATED|$EX_TEST"
+  "$EX_GENERATED|$EX_TEST" \
+  "    print('rendering');"
 
 check_pattern "no debugPrint() in shipped code" warn \
   '(^|[^a-zA-Z0-9_.])debugPrint\(' \
-  "$EX_GENERATED|$EX_TEST"
+  "$EX_GENERATED|$EX_TEST" \
+  "    debugPrint('rendering');"
 
 # ERE has no negative lookahead. Match every TODO/FIXME, then subtract the ones that
-# carry a ticket reference. The previous PCRE-style `TODO(?!\()` exited 2 on every run
-# and the error was discarded, so this check silently passed for its entire life.
+# carry a ticket reference. The previous PCRE-style `TODO(?!\()` never worked: GNU grep
+# warned and exited 1, ugrep exited 2, and either way the call site discarded it, so
+# this check reported "ok" for its entire life.
 check_pattern "TODOs carry a ticket reference" warn \
   '(TODO|FIXME)' \
-  "$EX_GENERATED|(TODO|FIXME)[[:space:]]*\([A-Z][A-Z0-9]*-[0-9]+\)"
+  "$EX_GENERATED|(TODO|FIXME)[[:space:]]*\([A-Z][A-Z0-9]*-[0-9]+\)" \
+  "  // TODO untracked"
 
 check_pattern "no commented-out code" warn \
   '^[[:space:]]*//[[:space:]]*(final|var|const|return|await|if|for|while|switch|import|Widget|Navigator|setState)[[:space:](]' \
-  "$EX_GENERATED|$EX_TEST"
+  "$EX_GENERATED|$EX_TEST" \
+  "  // final dead = 1;"
 
 check_pattern "no hardcoded colors in widget code" block \
   'Color\(0x|[^a-zA-Z0-9_.]Colors\.[a-z]' \
-  "$EX_GENERATED|$EX_TEST|$EX_THEME|Colors\.transparent"
+  "$EX_GENERATED|$EX_TEST|$EX_THEME|Colors\.transparent" \
+  "      color: Color(0xFFAABBCC),"
 
 check_pattern "no numeric EdgeInsets" block \
   'EdgeInsets\.(all|symmetric|only|fromLTRB)\([^)]*[0-9]' \
-  "$EX_GENERATED|$EX_TEST|$EX_THEME"
+  "$EX_GENERATED|$EX_TEST|$EX_THEME" \
+  "      margin: EdgeInsets.all(12),"
 
 check_pattern "use EdgeInsetsDirectional (start/end, not left/right)" block \
   'EdgeInsets\.(only|fromLTRB)\([^)]*(left|right):' \
-  "$EX_GENERATED|$EX_TEST"
+  "$EX_GENERATED|$EX_TEST" \
+  "      padding: EdgeInsets.only(left: 16, right: 8),"
 
 check_pattern "no hardcoded radii" warn \
   'BorderRadius\.circular\([0-9]' \
-  "$EX_GENERATED|$EX_TEST|$EX_THEME"
+  "$EX_GENERATED|$EX_TEST|$EX_THEME" \
+  "      borderRadius: BorderRadius.circular(8),"
 
 # Force-unwrap: `x!.foo`, `x!,`, `x!)`, `x!;`. The `!=` operator is excluded because
 # `=` is not in the trailing set. Warn rather than block — the token file's
 # `Theme.of(context).extension<AppTokens>()!` is a legitimate use.
 check_pattern "force-unwrap needs a comment justifying it" warn \
   '[]a-zA-Z0-9_)]!(\.|,|;|\))' \
-  "$EX_GENERATED|$EX_TEST"
+  "$EX_GENERATED|$EX_TEST" \
+  "      return Text(balance!.trim());"
 
 check_pattern "user-facing strings belong in ARB files" warn \
   'Text\([[:space:]]*.[^'"'"'"]*[[:space:]][^'"'"'"]*.[[:space:]]*[,)]' \
-  "$EX_GENERATED|$EX_TEST|$EX_L10N"
+  "$EX_GENERATED|$EX_TEST|$EX_L10N" \
+  "      child: Text('Your current balance'),"
 
 check_pattern "no committed credentials" block \
   '(api[_-]?key|apiKey|secret|password|access[_-]?token)[[:space:]]*[:=][[:space:]]*.[A-Za-z0-9_/+-]{16}|https?://[^[:space:]"'"'"']*:[^[:space:]"'"'"']*@' \
-  "$EX_TEST"
+  "$EX_TEST" \
+  "    final apiKey = 'sk_live_abcdef0123456789';"
 
 # ---------------------------------------------------------------- tests
 
