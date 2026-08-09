@@ -379,8 +379,16 @@ machine-scoped ones (`performance`, `review-gate`) into `~/.claude/skills/`. Res
 Claude Code once after creating a `.claude/skills` directory that didn't exist when the
 session started; after that, edits are picked up live.
 
-Trade-off: vendored skills don't receive updates, but they're visible in code review and
-can diverge per project. Marketplace install gets updates but lives outside the repo.
+Re-running the script leaves already-installed skills alone so local edits survive. To
+take a newer version, re-run with `--force` — and diff first if you've adapted them:
+
+```bash
+./install.sh --project ~/path/to/your/flutter-app --force
+```
+
+Trade-off: vendored skills only update when you ask them to, but they're visible in code
+review and can diverge per project. Marketplace install gets updates automatically but
+lives outside the repo.
 
 ## Upgrading from the flat layout
 

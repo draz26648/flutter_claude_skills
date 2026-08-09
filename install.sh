@@ -12,6 +12,7 @@ set -euo pipefail
 PROJECT=""
 PERSONAL_ONLY=false
 ALL_PERSONAL=false
+FORCE=false
 
 usage() {
   cat <<USAGE
@@ -20,7 +21,12 @@ Usage: ./install.sh [options]
   --project <path>   Copy project-scoped skills into <path>/.claude/skills/
   --personal         Copy only the machine-scoped skills into ~/.claude/skills/
   --all-personal     Copy every skill into ~/.claude/skills/
+  --force            Overwrite skills that are already installed
   -h, --help         Show this message
+
+Without --force an already-installed skill is left alone, so local edits survive.
+That also means it never updates — re-run with --force to take a new version, and
+diff first if you have adapted it.
 
 With --project, the machine-scoped skills (performance, review-gate) also go to
 ~/.claude/skills/ so they follow you across projects.
@@ -36,6 +42,7 @@ while [ $# -gt 0 ]; do
     --project) PROJECT="$2"; shift 2 ;;
     --personal) PERSONAL_ONLY=true; shift ;;
     --all-personal) ALL_PERSONAL=true; shift ;;
+    --force) FORCE=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -49,7 +56,13 @@ copy_skill() {
   local src="$1" dest="$2" name
   name="$(basename "$src")"
   if [ -d "$dest/$name" ]; then
-    echo "  skip $name (already exists — remove it first to reinstall)"
+    if [ "$FORCE" = true ]; then
+      rm -rf "${dest:?}/${name:?}"
+      cp -r "$src" "$dest/"
+      echo "  updated $name"
+    else
+      echo "  skip $name (already installed — re-run with --force to update)"
+    fi
   else
     cp -r "$src" "$dest/"
     echo "  added $name"

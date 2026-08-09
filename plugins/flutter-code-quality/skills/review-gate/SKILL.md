@@ -23,11 +23,12 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/review-gate/scripts/check.sh"
 ```
 
 `CLAUDE_PLUGIN_ROOT` is set by Claude Code and expands on its own; it does not need
-resolving by hand. If the skill was vendored into the project rather than installed as a
-plugin, that variable is unset — use the path it was copied to instead:
+resolving by hand. If the skill was vendored by `install.sh` rather than installed as a
+plugin, that variable is unset — use whichever copy exists:
 
 ```bash
-bash .claude/skills/review-gate/scripts/check.sh
+bash "$HOME/.claude/skills/review-gate/scripts/check.sh"   # --personal / --all-personal
+bash .claude/skills/review-gate/scripts/check.sh           # --project
 ```
 
 Options: `--skip-tests` when you only want lint feedback, `--all` to audit all of `lib/`

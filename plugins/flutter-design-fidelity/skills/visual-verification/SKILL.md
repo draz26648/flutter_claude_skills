@@ -37,9 +37,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/visual-verification/scripts/compare.py" \
 ```
 
 `CLAUDE_PLUGIN_ROOT` is set by Claude Code and expands on its own; it does not need
-resolving by hand. If the skill was vendored into the project rather than installed as a
+resolving by hand. If the skill was vendored by `install.sh` rather than installed as a
 plugin, that variable is unset — use `.claude/skills/visual-verification/scripts/compare.py`
-instead.
+instead (this one is project-scoped, so it is never under `$HOME`).
 
 The comparison logic lives in a script rather than in prose so it executes without
 loading into context. Anything deterministic belongs in a script — prose describing a
