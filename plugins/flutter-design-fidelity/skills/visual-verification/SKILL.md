@@ -29,17 +29,17 @@ design that was updated after the export.
 flutter test integration_test/screenshot_test.dart --dart-define=CAPTURE=true
 
 # Diff against the reference
-python3 "$SKILL_DIR/scripts/compare.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/visual-verification/scripts/compare.py" \
   --actual build/screenshots/login_screen.png \
   --expected design/exports/login_screen.png \
   --output build/screenshots/login_screen_diff.png \
   --threshold 0.02
 ```
 
-`compare.py` lives in the `scripts/` directory next to this SKILL.md. Resolve `$SKILL_DIR`
-to the absolute path of the directory this file was read from — when installed as a
-plugin the skill lives under `~/.claude/plugins/cache/`, not in the project, so a bare
-relative path will not find it.
+`CLAUDE_PLUGIN_ROOT` is set by Claude Code and expands on its own; it does not need
+resolving by hand. If the skill was vendored by `install.sh` rather than installed as a
+plugin, that variable is unset — use `.claude/skills/visual-verification/scripts/compare.py`
+instead (this one is project-scoped, so it is never under `$HOME`).
 
 The comparison logic lives in a script rather than in prose so it executes without
 loading into context. Anything deterministic belongs in a script — prose describing a
@@ -52,17 +52,52 @@ First run only, install its dependencies:
 pip install pillow numpy
 ```
 
+Exit codes: `0` match, `1` difference above threshold, `2` could not run — a missing file,
+an unreadable image, or bad arguments. **A `2` is not a pass**, and it is not a failing
+screen either; it means the comparison never happened.
+
+## Two thresholds
+
+`--threshold` (default 0.02) is the share of differing pixels across the whole image.
+`--max-cluster` (default 0.25) is the share within the worst single cell of a 12×12 grid.
+Either one being exceeded fails the comparison.
+
+The second exists because a global percentage hides the defects that matter most. A
+button rendered with the wrong color token covers about 1.5% of a phone screen — under
+the global threshold, and the first thing anyone notices. Judged locally it is a solid
+block of wrong, and it fails. When a run fails on the cluster threshold alone, the
+problem is one specific element, not a global color or scale issue, and the output says
+so.
+
+If a screen has inherently dynamic content — a status bar clock, a live avatar — exclude
+it with `--ignore-region X,Y,W,H` rather than raising the threshold until it passes.
+Raising the threshold blinds the whole screen to fix one rectangle.
+
 ## Reading a diff
 
-The output image highlights differing regions. Interpret them:
+The output image is the capture, faded, with differing pixels burned in as red. Interpret
+the red:
 
 - **A sharp offset of the entire content block** — padding or a margin token is wrong.
-- **Text differing at the edges only** — font weight, letter spacing, or line height.
-- **Whole regions differing in tone** — wrong color token, or a missing opacity.
-- **Everything shifted by a constant** — the export scale does not match the capture
-  device pixel ratio. Fix the export, not the code.
+- **Red outlining every glyph edge** — font weight, letter spacing, or line height.
+- **A solid red block over one element** — wrong color token, or a missing opacity.
+- **Red everywhere, evenly** — the export scale does not match the capture device pixel
+  ratio. Fix the export, not the code.
 - **Text differing in shape entirely** — the font is not bundled. Check `pubspec.yaml`
   before changing anything in the widget.
+
+Alongside the image the script prints the bounding box of all differences and the
+densest region. Read those before opening the PNG — they usually identify the element on
+their own.
+
+## Size mismatch is an error, not something to work around
+
+If the capture and the reference are different sizes the script stops. That is
+deliberate: rescaling one to fit the other manufactures edge noise along every boundary
+in the image, which buries the real defect under artifacts. A size mismatch nearly always
+means the export scale does not match the capture's device pixel ratio — fix that.
+`--allow-resize` overrides it when you genuinely need a rough comparison, and the output
+warns that the noise is expected.
 
 ## Export requirements
 

@@ -1,7 +1,7 @@
 {
   "name": "flutter-code-quality",
   "description": "Flutter architecture and quality conventions. Feature-first layering with a pure Dart domain, Cubit and Bloc emission and rebuild rules, responsive layout, accessibility and RTL requirements that design files never specify, performance rules, and a read-only pre-commit review gate.",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": {
     "name": "Mohamed Draz",
     "url": "https://github.com/draz26648"
