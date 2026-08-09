@@ -1,104 +1,106 @@
 ---
 name: state-management
-description: Cubit and Bloc conventions for this codebase — sealed state classes, naming, safe emission, selective rebuilds with BlocSelector, and the bloc_test pattern. Use this whenever writing or modifying any Cubit, Bloc, or state class, whenever wiring a widget to state, whenever a rebuild or setState question comes up, and whenever adding tests for state logic. Trigger it on any task that touches presentation logic, since incorrect emission and over-broad BlocBuilder scope are the two most common causes of jank in an otherwise correct implementation.
+description: State-management conventions — state shape, safe updates after an await, narrow rebuild scope, and the test pattern — resolved against whichever stack the project uses: Bloc, Cubit, Riverpod, Provider, signals, or plain setState. Use this whenever writing or modifying any Cubit, Bloc, Notifier, provider, or state class, whenever wiring a widget to state, whenever a rebuild or setState question comes up, and whenever adding tests for state logic. Trigger it on any task that touches presentation logic, since updating state after disposal and over-broad rebuild scope are the two most common causes of crashes and jank in an otherwise correct implementation.
 ---
 
 # State Management
 
-## State shape
+> **Profile first.** Read `.claude/flutter-profile.yaml` in the project root and take the
+> stack from `state`. With no profile, assume `state: bloc`, `models: freezed`.
+> Then read the reference for that stack before writing code:
+>
+> | `state` | Read |
+> |---|---|
+> | `bloc` (default) | `references/bloc.md` |
+> | `riverpod` | `references/riverpod.md` |
+> | `provider`, `signals`, `setstate` | Neither — apply the four rules below directly, using the translation table at the bottom |
+>
+> Do not mix stacks. Adding a Cubit to a Riverpod codebase because a Cubit is what you
+> know is the single most damaging thing an agent does to a state layer: it compiles, it
+> works on the screen it was added to, and it leaves the project with two sources of truth
+> that no reviewer asked for. Field list:
+> `${CLAUDE_PLUGIN_ROOT}/skills/architecture/references/flutter-profile.md`.
 
-One sealed state class per feature, using freezed. Union members, not a single class with
-nullable fields — a nullable-everything state makes every widget check three fields to
-know what to render, and the compiler stops helping.
+The four rules below hold under every stack. The references only differ in what the code
+for them looks like.
 
-```dart
-@freezed
-sealed class WalletState with _$WalletState {
-  const factory WalletState.initial() = WalletInitial;
-  const factory WalletState.loading() = WalletLoading;
-  const factory WalletState.loaded({
-    required Money balance,
-    required List<Transaction> transactions,
-  }) = WalletLoaded;
-  const factory WalletState.failure(Failure failure) = WalletFailure;
-}
-```
+## 1. State shape: one type, exhaustively switchable
 
-Exhaustive switching in the widget means adding a state member produces a compile error
+One state type per feature, expressed as a union of the states that can actually exist —
+not a single class with nullable fields covering every case at once. A
+nullable-everything state makes every widget check three fields to work out what to
+render, and the compiler stops helping.
+
+Under `models: freezed` or `dart_mappable`, that is a sealed union. Under `models:
+manual`, it is a sealed class hierarchy written by hand — Dart 3 gives you exhaustive
+`switch` on any sealed type, so the guarantee does not depend on codegen.
+
+The point is the exhaustiveness. Adding a state member should produce a compile error
 everywhere it needs handling, rather than a silently missing case at runtime.
 
-## Emission rules
+## 2. Never update state after disposal
 
-**Never emit after close.** Guard any emission that follows an await:
+Every state update that follows an `await` needs a liveness guard in front of it. Without
+one, navigating away mid-request throws. It is intermittent, it depends on network
+timing, and it is very hard to reproduce from a bug report — which is exactly why an
+agent will not add the guard unless told to.
 
-```dart
-Future<void> load() async {
-  emit(const WalletState.loading());
-  final result = await _repository.fetchWallet();
-  if (isClosed) return;
-  result.fold(
-    (failure) => emit(WalletState.failure(failure)),
-    (wallet) => emit(WalletState.loaded(
-      balance: wallet.balance,
-      transactions: wallet.transactions,
-    )),
-  );
-}
-```
+Each stack spells the guard differently (`isClosed`, `ref.mounted`, `mounted`). All of
+them need it. See your stack's reference.
 
-Without the `isClosed` guard, navigating away mid-request throws. It is intermittent,
-depends on network timing, and is very hard to reproduce from a bug report.
+## 3. Subscribe to the narrowest slice that works
 
-**Never emit the same state twice expecting a rebuild.** Bloc deduplicates by equality.
-With freezed, two identical `loaded` states are equal and the second emission does
-nothing. If a list changed in place, emit a new list rather than mutating the existing one.
+A widget reading one field should rebuild when that field changes, and not otherwise. On
+a screen where a transaction list and a balance header read the same state, a
+whole-state subscription on the header rebuilds it on every list update.
 
-**No `BuildContext` in a Cubit.** Navigation and snackbars are the widget's job, driven
-by `BlocListener`.
+Not fatal on its own, but it compounds, and it is free to avoid at authoring time and
+tedious to retrofit. Every stack has a narrowing primitive — `BlocSelector`,
+`ref.watch(p.select(...))`, `context.select`. Use it.
 
-## Rebuild scope
+Side effects — navigation, snackbars, dialogs — are a separate subscription from
+rendering, never a branch inside a builder. A builder can run more than once for the same
+state; a snackbar that fires from inside one will eventually fire twice.
 
-`BlocBuilder` rebuilds on every state change. When a widget only needs one field, use
-`BlocSelector`:
+## 4. No `BuildContext` in the state holder
 
-```dart
-BlocSelector<WalletCubit, WalletState, Money?>(
-  selector: (state) => state is WalletLoaded ? state.balance : null,
-  builder: (context, balance) => BalanceText(balance),
-)
-```
-
-On a screen where a transaction list and a balance header read the same Cubit, a plain
-`BlocBuilder` on the header rebuilds it on every list update. Not fatal, but it adds up,
-and it is free to avoid.
-
-Use `BlocListener` for side effects and `BlocConsumer` only when a widget genuinely needs
-both.
+Navigation and snackbars are the widget's job. A Cubit or Notifier holding a
+`BuildContext` has bound business logic to the widget tree and cannot be tested without
+pumping one.
 
 ## Testing
 
-```dart
-blocTest<WalletCubit, WalletState>(
-  'emits loading then loaded when fetch succeeds',
-  setUp: () => when(() => repository.fetchWallet())
-      .thenAnswer((_) async => Right(testWallet)),
-  build: () => WalletCubit(repository),
-  act: (cubit) => cubit.load(),
-  expect: () => [
-    const WalletState.loading(),
-    WalletState.loaded(balance: testWallet.balance, transactions: testWallet.transactions),
-  ],
-);
-```
+Every public method on a state holder gets at least a success case and a failure case.
+The failure path is the one that ships broken, because it is the one nobody clicks
+through manually.
 
-Every Cubit method gets at least a success case and a failure case. The failure path is
-the one that ships broken, because it is the one nobody clicks through manually.
+Assert on the *sequence* of states, not just the final one. A method that reaches
+`loaded` without passing through `loading` renders no spinner, and a test that only
+checks the endpoint passes anyway.
 
-## Common mistakes
+## Stacks without a reference file
 
-- Business logic in the Cubit that belongs in domain. A Cubit orchestrates; it does not
+| Rule | `provider` | `signals` | `setstate` |
+|---|---|---|---|
+| Liveness guard | `if (!mounted) return;` on `ChangeNotifier` | disposal check before assigning | `if (!mounted) return;` in the `State` |
+| Narrow subscription | `context.select` | fine-grained signal reads | n/a — keep the `State` small instead |
+| Side effects | listener outside `build` | `effect` | after the `await`, not in `build` |
+| Test entry point | construct the notifier directly | read the signal | `testWidgets` + `pumpWidget` |
+
+`setstate` is a legitimate answer for genuinely local state — a checkbox, an expansion
+tile, a form field's focus. It is not an answer for anything that outlives the widget or
+is read by a sibling. If a project's profile says `setstate` and you are about to lift
+state to an ancestor to share it, that is the moment to say the project has outgrown the
+setting, rather than quietly introducing a second stack.
+
+## Common mistakes, every stack
+
+- Business logic in the state holder that belongs in domain. It orchestrates; it does not
   decide business rules.
-- One giant Cubit for a whole screen with eight unrelated responsibilities. Split by
-  concern, not by route.
-- `context.read` inside `build()`. Use `context.watch` or a builder — `read` in build
-  does not subscribe and produces stale UI.
+- One holder for a whole screen with eight unrelated responsibilities. Split by concern,
+  not by route.
+- Emitting or assigning a value equal to the current state and expecting a rebuild. Every
+  one of these stacks deduplicates by equality. If a list changed in place, produce a new
+  list rather than mutating the existing one.
+- Reading state non-reactively inside `build` (`context.read`, `ref.read`). It does not
+  subscribe, so the UI goes stale in a way that looks like a caching bug.

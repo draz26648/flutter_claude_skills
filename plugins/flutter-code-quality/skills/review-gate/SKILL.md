@@ -1,10 +1,16 @@
 ---
 name: review-gate
-description: The pre-commit quality gate for Flutter work — formatting, static analysis, forbidden patterns, test and coverage checks, and a structured report of what fails. Use this when finishing any coding task, before committing, before opening a pull request, when asked whether something is ready to merge, or when asked to review changes. Trigger it at the end of substantial work without being asked, because the checks are cheap to run and the alternative is discovering the failures in CI after the context of the change has been lost.
+description: The pre-commit quality gate for Flutter work — formatting, static analysis, forbidden patterns, test checks, and a structured report of what fails. Use this when finishing any coding task, before committing, before opening a pull request, when asked whether something is ready to merge, or when asked to review changes. Trigger it at the end of substantial work without being asked, because the checks are cheap to run and the alternative is discovering the failures in CI after the context of the change has been lost.
 allowed-tools: Read, Grep, Glob, Bash
 ---
 
 # Review Gate
+
+> **Profile first.** `check.sh` reads `.claude/flutter-profile.yaml` on its own and prints
+> which profile it applied. You do not need to pass anything — but read the file too, so
+> the judgement calls at the end of this skill are made against the same conventions the
+> script enforced. Field list:
+> `${CLAUDE_PLUGIN_ROOT}/skills/architecture/references/flutter-profile.md`.
 
 This skill audits and reports. It does not fix. That restriction is deliberate: a gate
 with write access eventually satisfies its own checks by deleting the assertion that
@@ -69,6 +75,14 @@ Non-blocking:
 - `!` force-unwrap on a nullable — every one is a potential crash. Acceptable with a
   comment explaining why null is impossible, which is why this warns rather than blocks.
 - Hardcoded user-facing strings in `Text(...)` — see a11y-and-rtl.
+- Inline `TextStyle(...)` in widget code — see codebase-conventions.
+- An asset path that does not resolve to a file on disk. This one is a fact rather than a
+  convention: it throws at runtime, in the widget, on the device, and neither the analyzer
+  nor a test that skips that screen will say a word about it. It warns only because
+  promoting it to blocking would fail projects that pass today.
+- A widget class defined in more than one file, when the current change is part of the
+  duplication. The second `PrimaryButton` is correct, tested, redundant, and invisible in
+  review because the diff is all additions.
 
 **Where these are not enforced.** Generated files (`*.g.dart`, `*.freezed.dart`,
 `*.mocks.dart`, and similar), tests, and the token layer (`theme/`, `tokens/`,
@@ -76,6 +90,25 @@ Non-blocking:
 checks. Raw colors and numbers are exactly what belongs in the token file. A gate that
 fails on correct code gets switched off, so the carve-out is load-bearing rather than a
 convenience.
+
+**What the profile changes.** With no `.claude/flutter-profile.yaml` the list above is
+exactly what runs, so nothing changes for a project that never writes one. With a profile:
+
+| Setting | Effect |
+|---|---|
+| `tokens: none` | The colour, `EdgeInsets`, radius, and inline-`TextStyle` checks are skipped entirely — there is no token layer for them to point at |
+| `tokens: theme_only` or `constants` | Those drop to warnings; the values still ought to be centralised, but not through `AppTokens` |
+| `l10n: none` | The hardcoded-string check is skipped |
+| `locales` contains no RTL language | The directional-inset check drops to a warning |
+| `strictness: warn` | Every convention finding drops to a warning |
+
+`strictness: warn` never touches formatting, static analysis, failing tests, or committed
+credentials. Those block under every profile — they are not house style, and a project
+that wants them off wants a different tool.
+
+A skipped check is reported as skipped, with the profile setting that caused it. It is
+never silently omitted: a check that vanishes without explanation is indistinguishable
+from a check that passed, which is the failure mode 2.0.0 existed to fix.
 
 **Tests.** `flutter test` passes, and failures are named in the report. New public methods
 on a Cubit have tests covering both the success and the failure path. Changed golden PNGs

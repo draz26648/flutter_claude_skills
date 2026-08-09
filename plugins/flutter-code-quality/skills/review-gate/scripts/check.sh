@@ -2,25 +2,31 @@
 # Pre-commit quality gate for Flutter projects.
 # Reports findings; never modifies code.
 #
+# Reads .claude/flutter-profile.yaml if present, so the conventions it enforces are the
+# ones the project actually holds. With no profile it behaves exactly as it did before
+# the profile existed.
+#
 # Written for bash 3.2 (the version macOS ships) — no mapfile, no associative arrays.
 #
 # Exit codes:
 #   0  no blocking findings (warnings may still be present)
 #   1  at least one blocking finding
-#   2  the gate could not run — missing tooling, wrong directory, or a broken check
+#   2  the gate could not run — missing tooling, wrong directory, bad profile, broken check
 #
-# Usage: bash check.sh [--skip-tests] [--all]
+# Usage: bash check.sh [--skip-tests] [--all] [--profile PATH]
 
 set -uo pipefail
 
 SKIP_TESTS=false
 FORCE_ALL=false
+PROFILE_PATH=".claude/flutter-profile.yaml"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-tests) SKIP_TESTS=true; shift ;;
     --all)        FORCE_ALL=true; shift ;;
-    -h|--help)    sed -n '2,12p' "$0"; exit 0 ;;
+    --profile)    PROFILE_PATH="${2:-}"; [ -n "$PROFILE_PATH" ] || { printf 'gate: --profile needs a path\n' >&2; exit 2; }; shift 2 ;;
+    -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
     *) printf 'gate: unknown option %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -35,6 +41,10 @@ fail()    { BLOCKING=1; BLOCKERS="${BLOCKERS}  - $1"$'\n'; printf '  FAIL: %s\n'
 warn()    { WARNINGS="${WARNINGS}  - $1"$'\n'; printf '  WARN: %s\n' "$1"; }
 note()    { NOTES="${NOTES}  - $1"$'\n'; }
 pass()    { printf '  ok: %s\n' "$1"; }
+# A skipped check is announced with the reason. Silently omitting one makes it
+# indistinguishable from a check that passed, which is the whole bug class this gate
+# had in 1.0.0.
+skipped() { NOTES="${NOTES}  - not checked: $1 — $2"$'\n'; printf '  skipped: %s (%s)\n' "$1" "$2"; }
 
 # A gate that cannot run must say so loudly rather than reporting a clean bill of health.
 die() { printf '\ngate: %s\n' "$1" >&2; exit 2; }
@@ -44,6 +54,102 @@ die() { printf '\ngate: %s\n' "$1" >&2; exit 2; }
 command -v flutter >/dev/null 2>&1 || die "flutter is not on PATH"
 command -v dart    >/dev/null 2>&1 || die "dart is not on PATH"
 [ -f pubspec.yaml ] || die "no pubspec.yaml here — run this from the project root, not from the skill directory"
+
+# ---------------------------------------------------------------- profile
+#
+# Defaults are the conventions the gate enforced before the profile existed, so a project
+# with no .claude/flutter-profile.yaml sees exactly the behaviour it saw before.
+#
+# An unrecognised value is fatal rather than ignored. Treating `riverpood` as the default
+# would enforce the opposite of what the project asked for, with nothing in the output to
+# say so.
+
+P_TOKENS=theme_extension
+P_L10N=arb
+P_STRICTNESS=block
+P_LOCALES=""
+LOCALES_DECLARED=false
+PROFILE_LABEL="defaults (no $PROFILE_PATH)"
+
+# Flat `key: value` only, with `#` comments stripped. Deliberately not a YAML parser: the
+# profile is nine scalar fields and one inline list, and a dependency on PyYAML would put
+# the gate behind a pip install.
+profile_get() {
+  sed -n "s/^[[:space:]]*$1:[[:space:]]*\([^#]*\).*\$/\1/p" "$PROFILE_PATH" 2>/dev/null \
+    | head -1 | sed 's/[[:space:]]*$//'
+}
+
+require_value() { # require_value <field> <value> <allowed...>
+  case " $3 " in
+    *" $2 "*) return 0 ;;
+  esac
+  die "profile: $1: '$2' is not a recognised value. Expected one of: $3"
+}
+
+if [ -f "$PROFILE_PATH" ]; then
+  v=$(profile_get tokens);     [ -n "$v" ] && P_TOKENS="$v"
+  v=$(profile_get l10n);       [ -n "$v" ] && P_L10N="$v"
+  v=$(profile_get strictness); [ -n "$v" ] && P_STRICTNESS="$v"
+
+  # locales: [en, ar]  ->  " en ar "
+  v=$(profile_get locales)
+  if [ -n "$v" ]; then
+    LOCALES_DECLARED=true
+    P_LOCALES=" $(printf '%s' "$v" | tr -d '[]"'"'" | tr ',' ' ' | tr -s ' ') "
+  fi
+
+  require_value tokens     "$P_TOKENS"     "theme_extension theme_only constants none"
+  require_value l10n       "$P_L10N"       "arb easy_localization slang none"
+  require_value strictness "$P_STRICTNESS" "block warn"
+
+  PROFILE_LABEL="$PROFILE_PATH (tokens: $P_TOKENS, l10n: $P_L10N, strictness: $P_STRICTNESS"
+  if [ "$LOCALES_DECLARED" = true ]; then
+    PROFILE_LABEL="$PROFILE_LABEL, locales:$P_LOCALES)"
+  else
+    PROFILE_LABEL="$PROFILE_LABEL, locales: not declared)"
+  fi
+fi
+
+# strictness: warn downgrades house-style findings only. Formatting, static analysis,
+# failing tests and committed credentials block under every profile — a project that
+# wants those off wants a different tool.
+sev() {
+  if [ "$1" = block ] && [ "$P_STRICTNESS" = warn ]; then
+    printf 'warn'
+  else
+    printf '%s' "$1"
+  fi
+}
+
+case "$P_TOKENS" in
+  theme_extension)      TOKEN_SEV=$(sev block) ;;
+  theme_only|constants) TOKEN_SEV=warn ;;
+  none)                 TOKEN_SEV="skip:profile says tokens: none" ;;
+esac
+
+# Some checks warn under every token setting that has a token layer at all, so they only
+# follow the token severity when it says to skip.
+case "$TOKEN_SEV" in
+  skip:*) TOKEN_SOFT_SEV="$TOKEN_SEV" ;;
+  *)      TOKEN_SOFT_SEV=warn ;;
+esac
+
+if [ "$P_L10N" = none ]; then
+  STRING_SEV="skip:profile says l10n: none"
+else
+  STRING_SEV=warn
+fi
+
+# An undeclared `locales` keeps the RTL check blocking. The gate cannot tell whether the
+# project ships an RTL language, and the safe assumption is that it might — so the
+# downgrade needs the project to say so explicitly.
+RTL_SEV=$(sev block)
+if [ "$LOCALES_DECLARED" = true ]; then
+  case "$P_LOCALES" in
+    *" ar "*|*" he "*|*" fa "*|*" ur "*|*" ps "*|*" sd "*|*" ug "*|*" dv "*|*" yi "*) ;;
+    *) RTL_SEV=warn ;;
+  esac
+fi
 
 # ---------------------------------------------------------------- scope
 
@@ -75,6 +181,7 @@ fi
 [ ${#FILES[@]} -gt 0 ] || die "found no Dart files to audit under lib/ or test/"
 
 printf 'Scope: %s\n' "$SCOPE_LABEL"
+printf 'Profile: %s\n' "$PROFILE_LABEL"
 
 # ---------------------------------------------------------------- exclusions
 #
@@ -87,13 +194,19 @@ EX_TEST='(^|/)(test|integration_test)/|_test\.dart:'
 # this carve-out the gate fails on correct code, and a gate that cries wolf is ignored.
 EX_THEME='(^|/)(theme|themes|tokens|design_system)/|app_(colors|theme|tokens|typography|spacing|elevation)\.dart:'
 EX_L10N='(^|/)(l10n|generated|intl)/'
+# Path-only form, for checks that work on transformed lines rather than grep output.
+EX_GENERATED_FILE='\.(g|freezed|mocks|config|gr|pb|pbenum|pbjson)\.dart$'
 
 # ---------------------------------------------------------------- pattern engine
 
-# check_pattern <label> <block|warn> <ere-pattern> <exclusion-ere> <must-match-sample>
+# check_pattern <label> <block|warn|skip:reason> <ere-pattern> <exclusion-ere> <must-match-sample>
 #
 # The sample is a line the pattern is required to match. A check that cannot find its own
 # known violation is broken, and says so instead of reporting "ok".
+#
+# The self-test runs even for a check the profile switches off, so a pattern that rots
+# while it is skipped is caught the moment someone changes the profile rather than months
+# later.
 #
 # Exit codes alone are not enough to detect a bad pattern, because grep implementations
 # disagree. Given the PCRE lookahead this script used to carry, GNU grep prints a warning
@@ -111,6 +224,10 @@ check_pattern() {
     fail "check '$label' is broken: its pattern does not match its own test sample"
     return
   fi
+
+  case "$severity" in
+    skip:*) skipped "$label" "${severity#skip:}"; return ;;
+  esac
 
   errfile=$(mktemp) || die "mktemp failed"
   hits=$(grep -HnE -- "$pattern" "${FILES[@]}" 2>"$errfile")
@@ -174,7 +291,7 @@ rm -f "$ANALYZE_OUT"
 
 section "Forbidden patterns"
 
-check_pattern "no print() calls" block \
+check_pattern "no print() calls" "$(sev block)" \
   '(^|[^a-zA-Z0-9_.])print\(' \
   "$EX_GENERATED|$EX_TEST" \
   "    print('rendering');"
@@ -198,22 +315,22 @@ check_pattern "no commented-out code" warn \
   "$EX_GENERATED|$EX_TEST" \
   "  // final dead = 1;"
 
-check_pattern "no hardcoded colors in widget code" block \
+check_pattern "no hardcoded colors in widget code" "$TOKEN_SEV" \
   'Color\(0x|[^a-zA-Z0-9_.]Colors\.[a-z]' \
   "$EX_GENERATED|$EX_TEST|$EX_THEME|Colors\.transparent" \
   "      color: Color(0xFFAABBCC),"
 
-check_pattern "no numeric EdgeInsets" block \
+check_pattern "no numeric EdgeInsets" "$TOKEN_SEV" \
   'EdgeInsets\.(all|symmetric|only|fromLTRB)\([^)]*[0-9]' \
   "$EX_GENERATED|$EX_TEST|$EX_THEME" \
   "      margin: EdgeInsets.all(12),"
 
-check_pattern "use EdgeInsetsDirectional (start/end, not left/right)" block \
+check_pattern "use EdgeInsetsDirectional (start/end, not left/right)" "$RTL_SEV" \
   'EdgeInsets\.(only|fromLTRB)\([^)]*(left|right):' \
   "$EX_GENERATED|$EX_TEST" \
   "      padding: EdgeInsets.only(left: 16, right: 8),"
 
-check_pattern "no hardcoded radii" warn \
+check_pattern "no hardcoded radii" "$TOKEN_SOFT_SEV" \
   'BorderRadius\.circular\([0-9]' \
   "$EX_GENERATED|$EX_TEST|$EX_THEME" \
   "      borderRadius: BorderRadius.circular(8),"
@@ -226,7 +343,7 @@ check_pattern "force-unwrap needs a comment justifying it" warn \
   "$EX_GENERATED|$EX_TEST" \
   "      return Text(balance!.trim());"
 
-check_pattern "user-facing strings belong in ARB files" warn \
+check_pattern "user-facing strings belong in ARB files" "$STRING_SEV" \
   'Text\([[:space:]]*.[^'"'"'"]*[[:space:]][^'"'"'"]*.[[:space:]]*[,)]' \
   "$EX_GENERATED|$EX_TEST|$EX_L10N" \
   "      child: Text('Your current balance'),"
@@ -235,6 +352,107 @@ check_pattern "no committed credentials" block \
   '(api[_-]?key|apiKey|secret|password|access[_-]?token)[[:space:]]*[:=][[:space:]]*.[A-Za-z0-9_/+-]{16}|https?://[^[:space:]"'"'"']*:[^[:space:]"'"'"']*@' \
   "$EX_TEST" \
   "    final apiKey = 'sk_live_abcdef0123456789';"
+
+check_pattern "no inline TextStyle in widget code" "$TOKEN_SOFT_SEV" \
+  '[^a-zA-Z0-9_.]TextStyle\(' \
+  "$EX_GENERATED|$EX_TEST|$EX_THEME" \
+  "      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),"
+
+# ---------------------------------------------------------------- reuse and assets
+
+section "Reuse and assets"
+
+# An asset path that does not resolve throws at runtime, in the widget, on the device.
+# `flutter analyze` says nothing about it, and a test that never renders that screen says
+# nothing either, so it reaches review looking like working code. This is the one check
+# here that is a fact rather than a convention.
+check_assets() {
+  local hits line loc path missing="" count=0
+  hits=$(grep -HnoE "\.asset\([[:space:]]*['\"][^'\"\$]+['\"]" "${FILES[@]}" 2>/dev/null)
+
+  if [ -z "$hits" ]; then
+    pass "no literal asset paths in scope"
+    return
+  fi
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    loc=$(printf '%s' "$line" | sed -E 's|^(.*\.dart:[0-9]+):.*|\1|')
+    path=$(printf '%s' "$line" | sed -E "s|.*\.asset\([[:space:]]*['\"]||; s|['\"]\$||")
+    # A `packages/<name>/...` path resolves inside another package, not this checkout.
+    case "$path" in
+      packages/*) continue ;;
+    esac
+    if [ ! -f "$path" ]; then
+      count=$((count + 1))
+      missing="${missing}    $loc -> $path"$'\n'
+    fi
+  done <<EOF
+$hits
+EOF
+
+  if [ "$count" -eq 0 ]; then
+    pass "every referenced asset exists on disk"
+  else
+    warn "asset paths that do not resolve ($count) — these throw at runtime, not at compile time"
+    printf '%s' "$missing" | head -8
+    [ "$count" -gt 8 ] && printf '    ... and %s more\n' "$((count - 8))"
+  fi
+}
+check_assets
+
+# The second PrimaryButton. Correct, tested, redundant, and invisible in review because
+# the diff is all additions.
+check_duplicate_widgets() {
+  local defs dups name where in_change
+  if [ ! -d lib ]; then
+    skipped "no duplicate widget classes" "no lib/ directory"
+    return
+  fi
+
+  defs=$(grep -rHnE '^class [A-Z][A-Za-z0-9_]*[[:space:]]+extends[[:space:]]+(StatelessWidget|StatefulWidget|ConsumerWidget|ConsumerStatefulWidget|HookWidget|HookConsumerWidget)' \
+      lib --include='*.dart' 2>/dev/null \
+    | sed -E 's|^([^:]+):[0-9]+:class ([A-Za-z0-9_]+).*|\2 \1|' \
+    | grep -vE "$EX_GENERATED_FILE")
+
+  if [ -z "$defs" ]; then
+    pass "no duplicate widget classes"
+    return
+  fi
+
+  dups=$(printf '%s\n' "$defs" | awk '{print $1}' | sort | uniq -d)
+  if [ -z "$dups" ]; then
+    pass "no duplicate widget classes"
+    return
+  fi
+
+  local reported=0
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    where=$(printf '%s\n' "$defs" | awk -v n="$name" '$1 == n {print $2}')
+    # Report only duplicates the current change is part of. A pre-existing duplicate three
+    # features away is real but is not this diff's finding, and burying the change's own
+    # results is how a report stops being read.
+    in_change=false
+    while IFS= read -r f; do
+      for changed in "${FILES[@]}"; do
+        [ "$changed" = "$f" ] && in_change=true && break
+      done
+    done <<EOF
+$where
+EOF
+    [ "$in_change" = true ] || continue
+    reported=$((reported + 1))
+    warn "widget class '$name' is defined in more than one file — reuse one, or give them distinct names:"
+    printf '%s\n' "$where" | sed 's/^/    /'
+  done <<EOF
+$dups
+EOF
+
+  [ "$reported" -eq 0 ] && pass "no duplicate widget classes in this change"
+  return 0
+}
+check_duplicate_widgets
 
 # ---------------------------------------------------------------- tests
 
