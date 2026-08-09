@@ -194,10 +194,32 @@ def main() -> int:
                     )
                 all_skill_names[name] = rel(skill_dir)
 
+    check_changelog({p.get("version", "") for p in declared if p.get("version")})
+
     if all_skill_names:
         print(f"Validated {len(all_skill_names)} skills across {len(declared)} plugins.")
 
     return report()
+
+
+def check_changelog(versions: set[str]) -> None:
+    """Every shipped version needs an entry.
+
+    The README described a directory that did not exist and omitted one that did, for two
+    releases running. Docs drift silently unless something fails the build, and the
+    changelog is the doc most worth keeping honest — it is the only record of why a check
+    started failing on code that used to pass.
+    """
+    path = ROOT / "CHANGELOG.md"
+    if not path.is_file():
+        error("no CHANGELOG.md")
+        return
+
+    text = path.read_text(encoding="utf-8")
+    headings = set(re.findall(r"^##\s+(\d+\.\d+\.\d+)\s*$", text, re.MULTILINE))
+    for version in sorted(versions):
+        if version not in headings:
+            error(f"CHANGELOG.md has no '## {version}' entry for the current release")
 
 
 def report() -> int:

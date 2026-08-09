@@ -11,7 +11,7 @@
       "name": "flutter-design-fidelity",
       "source": "./plugins/flutter-design-fidelity",
       "description": "Keeps Flutter implementation matching the design. Enforces design tokens over hardcoded values, translates Figma Auto Layout into Row and Column rather than Stack, runs a screenshot diff loop instead of accepting the first render, and freezes the result in golden tests.",
-      "version": "1.1.0",
+      "version": "2.0.0",
       "author": {
         "name": "Mohamed Draz",
         "url": "https://github.com/draz26648"
@@ -25,7 +25,7 @@
       "name": "flutter-code-quality",
       "source": "./plugins/flutter-code-quality",
       "description": "Flutter architecture and quality conventions. Feature-first layering with a pure Dart domain, Cubit and Bloc emission and rebuild rules, responsive layout, accessibility and RTL requirements that design files never specify, performance rules, and a read-only pre-commit review gate.",
-      "version": "1.1.0",
+      "version": "2.0.0",
       "author": {
         "name": "Mohamed Draz",
         "url": "https://github.com/draz26648"
