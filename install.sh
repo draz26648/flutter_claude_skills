@@ -51,6 +51,23 @@ done
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 DESIGN="$ROOT/plugins/flutter-design-fidelity/skills"
 QUALITY="$ROOT/plugins/flutter-code-quality/skills"
+COMMANDS="$ROOT/plugins/flutter-code-quality/commands"
+PROFILE_SPEC="$QUALITY/architecture/references/flutter-profile.md"
+
+# `${CLAUDE_PLUGIN_ROOT}` is set by Claude Code for an installed plugin and unset for a
+# vendored copy, so a cross-skill link that works under the marketplace is a dead path
+# here. Give each vendored skill its own copy of the spec and point it at that. Vendoring
+# is already a copy; the alternative is a link that silently resolves to nothing, which is
+# the same failure the old `$SKILL_DIR` had.
+localise_profile_link() {
+  local skill_dir="$1" md="$1/SKILL.md"
+  [ -f "$md" ] || return 0
+  grep -q 'CLAUDE_PLUGIN_ROOT.*flutter-profile\.md' "$md" || return 0
+  mkdir -p "$skill_dir/references"
+  cp "$PROFILE_SPEC" "$skill_dir/references/flutter-profile.md"
+  sed 's|\${CLAUDE_PLUGIN_ROOT}/skills/[a-z-]*/references/flutter-profile\.md|references/flutter-profile.md|g' \
+    "$md" > "$md.tmp" && mv "$md.tmp" "$md"
+}
 
 copy_skill() {
   local src="$1" dest="$2" name
@@ -59,18 +76,34 @@ copy_skill() {
     if [ "$FORCE" = true ]; then
       rm -rf "${dest:?}/${name:?}"
       cp -r "$src" "$dest/"
+      localise_profile_link "$dest/$name"
       echo "  updated $name"
     else
       echo "  skip $name (already installed — re-run with --force to update)"
     fi
   else
     cp -r "$src" "$dest/"
+    localise_profile_link "$dest/$name"
     echo "  added $name"
   fi
 }
 
+# The command is only useful where the architecture skill also landed, since that is where
+# it reads the field list from.
+copy_command() {
+  local dest="$1" spec_path="$2" src="$COMMANDS/flutter-adapt.md" out="$1/flutter-adapt.md"
+  mkdir -p "$dest"
+  if [ -f "$out" ] && [ "$FORCE" = false ]; then
+    echo "  skip flutter-adapt.md (already installed — re-run with --force to update)"
+    return 0
+  fi
+  sed "s|\${CLAUDE_PLUGIN_ROOT}/skills/architecture/references/flutter-profile.md|$spec_path|g" \
+    "$src" > "$out"
+  echo "  added /flutter-adapt"
+}
+
 project_skills() {
-  echo "$DESIGN/design-tokens $DESIGN/figma-to-widget $DESIGN/visual-verification $DESIGN/golden-tests $QUALITY/architecture $QUALITY/state-management $QUALITY/responsive-adaptive $QUALITY/a11y-and-rtl"
+  echo "$DESIGN/design-tokens $DESIGN/figma-to-widget $DESIGN/visual-verification $DESIGN/golden-tests $QUALITY/architecture $QUALITY/state-management $QUALITY/responsive-adaptive $QUALITY/a11y-and-rtl $QUALITY/codebase-conventions"
 }
 
 personal_skills() {
@@ -81,17 +114,23 @@ if [ "$ALL_PERSONAL" = true ]; then
   echo "Copying all skills to ~/.claude/skills/"
   mkdir -p "$HOME/.claude/skills"
   for s in $(project_skills) $(personal_skills); do copy_skill "$s" "$HOME/.claude/skills"; done
+  echo "Copying the command to ~/.claude/commands/"
+  copy_command "$HOME/.claude/commands" "$HOME/.claude/skills/architecture/references/flutter-profile.md"
 
 elif [ "$PERSONAL_ONLY" = true ]; then
   echo "Copying machine-scoped skills to ~/.claude/skills/"
   mkdir -p "$HOME/.claude/skills"
   for s in $(personal_skills); do copy_skill "$s" "$HOME/.claude/skills"; done
+  echo "  note: /flutter-adapt not installed — it needs the architecture skill, which"
+  echo "        --personal does not copy. Use --project or --all-personal for it."
 
 elif [ -n "$PROJECT" ]; then
   [ -f "$PROJECT/pubspec.yaml" ] || echo "Warning: no pubspec.yaml at $PROJECT — is that a Flutter project?"
   echo "Copying project skills to $PROJECT/.claude/skills/"
   mkdir -p "$PROJECT/.claude/skills"
   for s in $(project_skills); do copy_skill "$s" "$PROJECT/.claude/skills"; done
+  echo "Copying the command to $PROJECT/.claude/commands/"
+  copy_command "$PROJECT/.claude/commands" ".claude/skills/architecture/references/flutter-profile.md"
   echo "Copying machine-scoped skills to ~/.claude/skills/"
   mkdir -p "$HOME/.claude/skills"
   for s in $(personal_skills); do copy_skill "$s" "$HOME/.claude/skills"; done
@@ -107,6 +146,6 @@ Done.
 Next:
   1. Restart Claude Code once if .claude/skills did not exist before.
   2. Verify with: ls .claude/skills/*/SKILL.md
-  3. Adapt the skills to your codebase — see "Adapt before you rely on them" in the
-     README. They describe one set of conventions and will fight yours until edited.
+  3. Run /flutter-adapt to generate .claude/flutter-profile.yaml, so the skills describe
+     your stack rather than the defaults they ship with.
 NEXT

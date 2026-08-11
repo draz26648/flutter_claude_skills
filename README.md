@@ -1,10 +1,15 @@
 # Flutter Skills for Claude Code
 
-Ten Agent Skills for production Flutter work, packaged as an installable plugin
+Eleven Agent Skills for production Flutter work, packaged as an installable plugin
 marketplace. They teach Claude Code the conventions that normally live in three senior
 developers' heads: design tokens instead of hardcoded values, a verification loop instead
 of a single render, and the RTL and accessibility requirements no design file ever
 specifies.
+
+They adapt to your codebase rather than imposing one. A nine-line project profile records
+the stack — Bloc or Riverpod, feature-first or layer-first, ARB or none — and a generated
+conventions file records where your shared widgets, typography, and assets live, so
+generated code reuses what you have instead of building a second copy of it.
 
 ## Install
 
@@ -14,6 +19,17 @@ specifies.
 /plugin install flutter-code-quality@draz-flutter
 /reload-plugins
 ```
+
+Then, once, from your project root:
+
+```
+/flutter-code-quality:flutter-adapt
+```
+
+That writes two files — `.claude/flutter-profile.yaml` and
+`.claude/flutter-conventions.md` — which is how the skills learn your codebase instead of
+assuming mine. See [Your stack, not mine](#your-stack-not-mine) and
+[Your components, not new ones](#your-components-not-new-ones).
 
 Or from the terminal:
 
@@ -43,6 +59,67 @@ You *can* run one by hand. Plugin skills are namespaced by plugin name:
 
 Most of the value is in the automatic path. Manual invocation is for when you want a
 specific audit on demand, like running the review gate before a PR.
+
+## Your stack, not mine
+
+These skills hold opinions, and some of them will be wrong about your codebase. A skill
+that is wrong about the codebase loses every argument it has with the developer, so the
+project gets to state which opinions apply:
+
+```yaml
+# .claude/flutter-profile.yaml
+state: riverpod          # bloc | riverpod | provider | signals | setstate
+models: freezed          # freezed | dart_mappable | json_serializable | manual
+structure: feature_first # feature_first | layer_first
+di: riverpod             # get_it | injectable | riverpod | provider | none
+routing: go_router       # go_router | auto_route | navigator
+tokens: theme_extension  # theme_extension | theme_only | constants | none
+l10n: arb                # arb | easy_localization | slang | none
+locales: [en, ar]
+strictness: block        # block | warn
+```
+
+`/flutter-adapt` generates it by reading `pubspec.yaml` and `lib/`. Every field defaults
+to what the skills already assumed, so a project that agrees with them needs no file and
+sees no change.
+
+Two settings do most of the work:
+
+**`tokens`** decides whether a hardcoded `Color(0xFF...)` is a blocking finding, a warning,
+or not a finding at all. A project with no token layer stops being told to use one on
+every commit.
+
+**`strictness: warn`** is for an existing codebase adopting this partway through its life,
+where a gate that blocks on day one gets switched off on day two. It downgrades every
+convention finding and leaves formatting, static analysis, failing tests, and committed
+credentials blocking — those are not matters of house style.
+
+An unrecognised value stops the gate with exit `2` rather than falling back to the
+default. Reading `riverpood` as `bloc` would enforce the opposite of what you asked for,
+with nothing in the output to say so.
+
+## Your components, not new ones
+
+The profile records decisions. `.claude/flutter-conventions.md` records what your code
+actually does — where the shared widgets live, which class owns typography, which asset
+directories are declared, whether routed widgets are `*Page` or `*Screen`.
+
+`/flutter-adapt` generates it too. It's read by the `codebase-conventions` skill on every
+code-writing task, and it exists because of one specific failure:
+
+> An agent greps for `PrimaryButton`, finds nothing, and builds one. The project already
+> had `AppButton`.
+
+Nothing catches that in review. The diff is all additions, every line is defensible, and
+the duplication surfaces months later when a brand change has to be applied twice. The
+fix is to search by **role** rather than by the name you had in mind — `class .*Button`,
+not `PrimaryButton` — and the skill makes that the required first step.
+
+**The file records locations and rules, never an inventory.** "Shared widgets live in
+`lib/core/widgets/`, named `App<Thing>`" stays true for years. "The project has
+`AppButton`, `AppCard`, `AppChip`…" is wrong after the next merge — and a stale list is
+worse than no list, because it gets trusted, so the search that would have found the real
+answer never happens.
 
 ---
 
@@ -177,7 +254,7 @@ than CI.
 
 # flutter-code-quality
 
-Six skills covering structure, robustness, and the gate.
+Seven skills covering structure, robustness, and the gate.
 
 ## architecture
 
@@ -203,13 +280,50 @@ repository adds a file and no behaviour. Agents love generating full Clean Archi
 scaffolding for a settings toggle, and a skill that only says "follow the layers"
 encourages exactly that.
 
+## codebase-conventions
+
+**Triggers on:** writing any widget, screen, shared component, text style, or asset
+reference. Effectively every code-writing task.
+
+The one that makes generated code look like it belongs. Four rules:
+
+**Reuse before create.** Search by role, not by name, in a fixed order: by suffix
+(`class .*Button`), by the noun in the request, then in the shared directories. Read what
+you found before deciding. A widget doing 80% of the job is usually one parameter away
+from doing all of it, and adding the parameter is a smaller change than adding a file.
+
+**Typography comes from the project's source.** Never inline `TextStyle(...)`. A single
+`copyWith` on an existing style is fine; reaching for three properties at once means the
+style itself is missing.
+
+**Never invent an asset path.** Confirm the file exists and its directory is declared in
+`pubspec.yaml`. If it doesn't exist, stop and say so — don't substitute a Material icon
+for a missing brand asset and don't write the path you expect someone to export later. A
+plausible placeholder is worse than a blocked task, because the blocked task gets resolved.
+
+**Match the house style.** File naming, `*Page` vs `*Screen` (count before choosing), the
+widget base class in use, `package:` vs relative imports. None of it is correctness — it's
+the difference between a change that reads as part of the codebase and one that reads as
+pasted in.
+
+Explicitly *not* covered: anything `dart format` and `analysis_options.yaml` already
+enforce. Run the formatter and let the analyzer speak.
+
 ## state-management
 
-**Triggers on:** writing or modifying any Cubit, Bloc, or state class; wiring a widget to
-state.
+**Triggers on:** writing or modifying any Cubit, Bloc, Notifier, provider, or state class;
+wiring a widget to state.
 
-Sealed states via freezed, so adding a state member produces a compile error everywhere
-it needs handling rather than a silently missing case at runtime.
+Stack-agnostic. Four rules that hold everywhere — an exhaustively switchable state type, a
+liveness guard after every `await`, the narrowest subscription that works, and no
+`BuildContext` in the state holder — with the code for them in `references/bloc.md` and
+`references/riverpod.md`, chosen by the profile's `state` field. `provider`, `signals`,
+and `setstate` get a translation table instead of a full reference.
+
+The instruction that matters most is the one about not mixing stacks. Adding a Cubit to a
+Riverpod codebase because a Cubit is what the model knows is the single most damaging
+thing it does to a state layer: it compiles, it works on the screen it was added to, and
+it leaves two sources of truth nobody asked for.
 
 The rule that catches a real production bug:
 
@@ -224,12 +338,15 @@ Future<void> load() async {
 
 Without the guard, navigating away mid-request throws. It's intermittent, depends on
 network timing, and is very hard to reproduce from a bug report. An agent will not add it
-unless told to.
+unless told to. Riverpod's version is `if (!ref.mounted) return;`, and `autoDispose` makes
+it matter more rather than less — the provider is torn down the moment the last listener
+leaves the screen, which is exactly the navigate-away case.
 
-Also covers rebuild scope — `BlocSelector` over `BlocBuilder` when a widget reads one
-field — and the `bloc_test` pattern, with the rule that every Cubit method gets both a
-success and a failure test. The failure path is the one that ships broken, because it's
-the one nobody clicks through manually.
+Also covers rebuild scope — `BlocSelector` or `ref.watch(p.select(...))` when a widget
+reads one field — and the test pattern for each stack, with the rule that every method
+gets both a success and a failure test, asserting the *sequence* of states rather than
+the final one. A method that reaches `loaded` without passing through `loading` renders no
+spinner, and a test that only checks the endpoint passes anyway.
 
 ## responsive-adaptive
 
@@ -327,29 +444,35 @@ Reports in three groups: blocking, worth fixing, notes. With the instruction tha
 nothing is blocking it should say so plainly rather than manufacturing findings — a gate
 that always reports problems teaches people to ignore it.
 
+It reads `.claude/flutter-profile.yaml` on its own and prints which profile it applied. A
+check the profile switches off prints as *skipped*, with the setting responsible — a check
+that vanishes without explanation is indistinguishable from one that passed, which is the
+bug the 2.0.0 release existed to fix.
+
 ---
 
-## Adapt before you rely on them
+## When the profile is not enough
 
-These skills describe a specific set of conventions: freezed sealed states, Cubit,
-feature-first structure, an `AppTokens` ThemeExtension. If your codebase does something
-different, the skills will fight it, and the skill loses.
+The profile covers the decisions that recur across projects. It will not cover a
+home-grown DI container, a custom navigation wrapper, or a token layer with two competing
+entry points — and a skill that is wrong about those still loses the argument.
 
-Installed plugins live in `~/.claude/plugins/cache/` and are overwritten on update, so
-edit them by forking this repo rather than in place. Fork, adjust the `SKILL.md` files,
-and point the marketplace at your fork:
+For divergence that deep, fork. Installed plugins live in `~/.claude/plugins/cache/` and
+are overwritten on update, so editing them in place does not survive; fork the repo,
+adjust the `SKILL.md` files, and point the marketplace at your copy:
 
 ```
 /plugin marketplace add your-username/flutter_claude_skills
 ```
 
-The fastest way to adapt them is to let Claude Code do it. From your project root:
+The fastest way to work out whether you need that is to ask. From your project root:
 
-> Read the installed flutter-code-quality and flutter-design-fidelity skills. Inspect
-> this codebase — pubspec.yaml, analysis_options.yaml, the lib/ structure, the theme
-> setup, and three representative widgets. Tell me where the skills' conventions differ
-> from what this project actually does, and rewrite them to match. Where a convention
-> does not exist here yet, flag it as a new rule rather than inventing one silently.
+> Read the installed flutter-code-quality and flutter-design-fidelity skills and my
+> `.claude/flutter-profile.yaml`. Inspect this codebase — pubspec.yaml,
+> analysis_options.yaml, the lib/ structure, the theme setup, and three representative
+> widgets. Tell me where the skills' conventions still differ from what this project
+> actually does after the profile is applied, and which of those the profile has no field
+> for.
 
 ## The Figma piece
 
@@ -374,10 +497,16 @@ cd flutter_claude_skills
 ./install.sh --project ~/path/to/your/flutter-app
 ```
 
-That copies the eight project-scoped skills into `<project>/.claude/skills/` and the two
-machine-scoped ones (`performance`, `review-gate`) into `~/.claude/skills/`. Restart
-Claude Code once after creating a `.claude/skills` directory that didn't exist when the
-session started; after that, edits are picked up live.
+That copies the nine project-scoped skills into `<project>/.claude/skills/`, the two
+machine-scoped ones (`performance`, `review-gate`) into `~/.claude/skills/`, and
+`/flutter-adapt` into `<project>/.claude/commands/`. Restart Claude Code once after
+creating a `.claude/skills` directory that didn't exist when the session started; after
+that, edits are picked up live.
+
+`${CLAUDE_PLUGIN_ROOT}` is unset outside a plugin install, so the installer also gives
+each vendored skill its own copy of the profile spec and rewrites the cross-skill link to
+point at it. Without that the links resolve to nothing, which is the same failure the old
+`$SKILL_DIR` had.
 
 Re-running the script leaves already-installed skills alone so local edits survive. To
 take a newer version, re-run with `--force` — and diff first if you've adapted them:
@@ -448,14 +577,20 @@ plugins/
     .claude-plugin/plugin.json
     skills/design-tokens/SKILL.md
     skills/design-tokens/references/theme-extension-template.dart
+    skills/design-tokens/references/flutter-profile.md      copy — kept identical by CI
     skills/figma-to-widget/SKILL.md
     skills/visual-verification/SKILL.md
     skills/visual-verification/scripts/compare.py
     skills/golden-tests/SKILL.md
   flutter-code-quality/
     .claude-plugin/plugin.json
+    commands/flutter-adapt.md
     skills/architecture/SKILL.md
+    skills/architecture/references/flutter-profile.md       the profile spec
+    skills/codebase-conventions/SKILL.md
     skills/state-management/SKILL.md
+    skills/state-management/references/bloc.md
+    skills/state-management/references/riverpod.md
     skills/responsive-adaptive/SKILL.md
     skills/a11y-and-rtl/SKILL.md
     skills/performance/SKILL.md
@@ -463,6 +598,10 @@ plugins/
     skills/review-gate/scripts/check.sh
 install.sh                           for vendoring into a project instead
 ```
+
+`flutter-profile.md` exists twice because each plugin has to work when it is the only one
+installed. `validate.py` fails the build if the copies drift — the top-level `skills/`
+mirror removed in 2.0.0 went stale precisely because nothing compared them.
 
 `plugins/` is the only source of truth. There is deliberately no top-level `skills/`
 mirror — it existed before v1.0.0, drifted behind the plugin copies within a handful of

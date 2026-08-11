@@ -5,6 +5,12 @@ description: The translation contract from Figma structures to Flutter widgets �
 
 # Figma to Widget
 
+> **Profile first.** Read `.claude/flutter-profile.yaml` in the project root. `tokens`
+> decides how the values in a frame get resolved and `structure` decides where the new
+> widget file goes. The mapping table below is stack-independent and holds under every
+> profile. Field list:
+> `${CLAUDE_PLUGIN_ROOT}/skills/design-tokens/references/flutter-profile.md`.
+
 The failure mode this prevents: translating a design by reading pixel positions and
 reproducing them with `Stack` and `Positioned`. That output matches the artboard exactly
 and breaks on every other screen size. Figma's layout system maps cleanly onto Flutter's
@@ -46,8 +52,11 @@ an avatar, an icon, a fixed-size chip.
 
 **Check for an existing component before building a new one.** A Figma component
 instance almost always corresponds to a widget that already exists in the codebase.
-Search for it. Building a second `PrimaryButton` because the first was not found is the
-most common form of duplication in agent-generated UI.
+Building a second `PrimaryButton` because the first was not found is the most common form
+of duplication in agent-generated UI — and the usual cause is searching for the name you
+expected rather than the role. Search by suffix (`class .*Button`), not by the name in
+your head. The codebase-conventions skill carries the full search protocol and the
+project's component locations.
 
 **Variants are parameters.** A Figma component with Default, Hover, Disabled, and Loading
 variants becomes one widget with a state parameter — not four widgets.

@@ -23,6 +23,17 @@ DESCRIPTION_HARD_LIMIT = 1024
 DESCRIPTION_SOFT_LIMIT = 800
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
+# `${CLAUDE_PLUGIN_ROOT}/skills/<skill>/references/<file>` resolves from the plugin root,
+# which is how one skill points at a file owned by another. A bare `references/<file>`
+# resolves from the skill's own directory.
+PLUGIN_ROOT_REF_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9_./-]+)")
+LOCAL_REF_RE = re.compile(r"(?:scripts|references)/[A-Za-z0-9_.-]+")
+
+# Files deliberately duplicated across plugins, because each plugin has to work when it is
+# the only one installed. Duplication is only safe while something fails the build when the
+# copies drift — which is the lesson of the top-level skills/ mirror that this repo removed.
+SHARED_FILENAMES = {"flutter-profile.md"}
+
 errors: list[str] = []
 warnings: list[str] = []
 
@@ -66,7 +77,57 @@ def parse_frontmatter(path: Path) -> dict[str, str] | None:
     return fields
 
 
-def check_skill(skill_dir: Path) -> str | None:
+def check_links(md: Path, body: str, skill_dir: Path | None, plugin_dir: Path) -> None:
+    """Every referenced script and reference file must exist, and be addressed portably."""
+    if "$SKILL_DIR" in body:
+        error(
+            f"{rel(md)}: uses $SKILL_DIR, which is not a real variable. "
+            "Use ${CLAUDE_PLUGIN_ROOT} instead."
+        )
+
+    for target in PLUGIN_ROOT_REF_RE.findall(body):
+        if not (plugin_dir / target).is_file():
+            error(f"{rel(md)}: references '${{CLAUDE_PLUGIN_ROOT}}/{target}' which does not exist")
+
+    # Strip the plugin-root links so their tails are not re-checked as skill-local paths.
+    remainder = PLUGIN_ROOT_REF_RE.sub("", body)
+    if skill_dir is None:
+        return
+    for ref in LOCAL_REF_RE.findall(remainder):
+        if not (skill_dir / ref).is_file():
+            error(f"{rel(md)}: references '{ref}' which does not exist")
+
+
+def check_commands(plugin_dir: Path) -> None:
+    """Slash commands are a second entry point into the same plugin and rot the same way."""
+    commands_dir = plugin_dir / "commands"
+    if not commands_dir.is_dir():
+        return
+    for cmd in sorted(commands_dir.glob("*.md")):
+        fields = parse_frontmatter(cmd)
+        if fields is None:
+            continue
+        if not fields.get("description"):
+            error(f"{rel(cmd)}: frontmatter has no 'description' — it will be unlabelled in /help")
+        check_links(cmd, cmd.read_text(encoding="utf-8"), None, plugin_dir)
+
+
+def check_shared_copies() -> None:
+    """A file duplicated across plugins must be byte-identical in every copy."""
+    for filename in sorted(SHARED_FILENAMES):
+        copies = sorted((ROOT / "plugins").rglob(filename))
+        if len(copies) < 2:
+            continue
+        first = copies[0].read_bytes()
+        for other in copies[1:]:
+            if other.read_bytes() != first:
+                error(
+                    f"{rel(other)} has drifted from {rel(copies[0])}. These are deliberate "
+                    "copies so each plugin stands alone; they have to stay identical."
+                )
+
+
+def check_skill(skill_dir: Path, plugin_dir: Path) -> str | None:
     """Validate one skill directory. Returns its declared name, if any."""
     md = skill_dir / "SKILL.md"
     if not md.is_file():
@@ -96,16 +157,7 @@ def check_skill(skill_dir: Path) -> str | None:
         elif n > DESCRIPTION_SOFT_LIMIT:
             warn(f"{rel(md)}: description is {n} chars, over the {DESCRIPTION_SOFT_LIMIT} soft limit")
 
-    # Referenced scripts and references must exist, and must be addressed portably.
-    body = md.read_text(encoding="utf-8")
-    if "$SKILL_DIR" in body:
-        error(
-            f"{rel(md)}: uses $SKILL_DIR, which is not a real variable. "
-            "Use ${CLAUDE_PLUGIN_ROOT} instead."
-        )
-    for ref in re.findall(r"(?:scripts|references)/[A-Za-z0-9_.-]+", body):
-        if not (skill_dir / ref).is_file():
-            error(f"{rel(md)}: references '{ref}' which does not exist")
+    check_links(md, md.read_text(encoding="utf-8"), skill_dir, plugin_dir)
 
     for script in (skill_dir / "scripts").glob("*"):
         if script.is_file() and script.suffix in {".sh", ".py"} and not script.stat().st_mode & 0o111:
@@ -184,8 +236,10 @@ def main() -> int:
             error(f"{rel(plugin_dir)}: no skills/ directory")
             continue
 
+        check_commands(plugin_dir)
+
         for skill_dir in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
-            name = check_skill(skill_dir)
+            name = check_skill(skill_dir, plugin_dir)
             if name:
                 if name in all_skill_names:
                     error(
@@ -194,6 +248,7 @@ def main() -> int:
                     )
                 all_skill_names[name] = rel(skill_dir)
 
+    check_shared_copies()
     check_changelog({p.get("version", "") for p in declared if p.get("version")})
 
     if all_skill_names:

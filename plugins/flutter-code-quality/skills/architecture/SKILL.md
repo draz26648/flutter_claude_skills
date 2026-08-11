@@ -5,6 +5,13 @@ description: The layering rules for this Flutter codebase — feature-first stru
 
 # Architecture
 
+> **Profile first.** Read `.claude/flutter-profile.yaml` in the project root before
+> placing any file. This skill is governed by `structure`, `state`, and `di`. With no
+> profile, assume `structure: feature_first`, `state: bloc`, `di: get_it` — the layout
+> below. Under `structure: layer_first` the layers are top-level directories and features
+> are subdirectories inside them; the rules about which direction dependencies point are
+> unchanged. Field list: `references/flutter-profile.md`.
+
 Feature-first, three layers per feature. The rules exist to keep business logic testable
 without a Flutter binding and swappable without touching the UI.
 

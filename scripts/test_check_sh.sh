@@ -149,6 +149,180 @@ CLEAN_CODE=$(cd "$CLEAN" && bash "$GATE" --skip-tests >/dev/null 2>&1; echo $?)
 expect_exit "$CLEAN_CODE" 0 "exits 0 on a clean project"
 expect_contains "$CLEAN_OUT" "Nothing blocking" "says so plainly when nothing blocks"
 
+# ---------------------------------------------------------------- profile
+#
+# The fixture is analyzer-clean on purpose. The violations fixture above trips
+# `flutter analyze --fatal-infos`, and analysis blocks under every profile — so it could
+# never show that a profile setting changed a verdict.
+
+echo "== profile =="
+PP="$(new_project profile)" || { echo "flutter create failed"; exit 2; }
+rm -rf "${PP:?}/test"
+cat > "$PP/lib/main.dart" <<'EOF'
+import 'package:flutter/material.dart';
+
+void main() => runApp(const BalanceCard());
+
+class BalanceCard extends StatelessWidget {
+  const BalanceCard({super.key});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    color: const Color(0xFFAABBCC),
+    padding: const EdgeInsets.only(left: 16, right: 8),
+    child: const Text('Your current balance'),
+  );
+}
+EOF
+( cd "$PP" && git add -A >/dev/null )
+
+write_profile() { mkdir -p "$PP/.claude" && printf '%s\n' "$1" > "$PP/.claude/flutter-profile.yaml"; }
+run_profiled()  { ( cd "$PP" && bash "$GATE" --skip-tests 2>&1 ); }
+code_profiled() { ( cd "$PP" && bash "$GATE" --skip-tests >/dev/null 2>&1; echo $? ); }
+
+# Baseline: no profile must behave exactly as it did before profiles existed.
+rm -rf "$PP/.claude"
+BASE_OUT="$(run_profiled)"
+
+# The fixture has to be format-clean and analyzer-clean, or those block under every
+# profile and no assertion below can distinguish a profile effect from a formatting one.
+expect_absent "$BASE_OUT" "FAIL: dart format" "profile fixture is format-clean"
+expect_absent "$BASE_OUT" "FAIL: flutter analyze" "profile fixture is analyzer-clean"
+expect_exit "$(code_profiled)" 1 "no profile: hardcoded values still block"
+expect_contains "$BASE_OUT" "defaults (no .claude/flutter-profile.yaml)" "no profile: says so in the header"
+expect_contains "$BASE_OUT" "FAIL: no hardcoded colors" "no profile: colors block"
+expect_contains "$BASE_OUT" "FAIL: use EdgeInsetsDirectional" "no profile: RTL blocks with locales undeclared"
+
+# tokens: none — the project has no token layer, so the token checks have nothing to
+# point at and must not run. A skipped check has to say it was skipped.
+write_profile 'tokens: none'
+TN_OUT="$(run_profiled)"
+expect_contains "$TN_OUT" "skipped: no hardcoded colors" "tokens: none skips the colour check"
+expect_contains "$TN_OUT" "skipped: no numeric EdgeInsets" "tokens: none skips the EdgeInsets check"
+expect_contains "$TN_OUT" "skipped: no hardcoded radii" "tokens: none skips the radius check"
+expect_contains "$TN_OUT" "not checked: no hardcoded colors" "a skipped check is listed in NOTES"
+expect_absent   "$TN_OUT" "FAIL: no hardcoded colors" "tokens: none does not block on colours"
+
+# theme_only — the values should still be centralised, just not through AppTokens.
+write_profile 'tokens: theme_only'
+TO_OUT="$(run_profiled)"
+expect_contains "$TO_OUT" "WARN: no hardcoded colors" "tokens: theme_only downgrades to a warning"
+expect_absent   "$TO_OUT" "FAIL: no hardcoded colors" "tokens: theme_only does not block"
+
+# locales — declaring an LTR-only set downgrades RTL; declaring an RTL locale blocks.
+write_profile 'locales: [en]'
+L_OUT="$(run_profiled)"
+expect_contains "$L_OUT" "WARN: use EdgeInsetsDirectional" "locales: [en] downgrades the RTL check"
+write_profile 'locales: [en, ar]'
+LA_OUT="$(run_profiled)"
+expect_contains "$LA_OUT" "FAIL: use EdgeInsetsDirectional" "an RTL locale keeps the RTL check blocking"
+
+# l10n: none — no strings mechanism, so a literal in Text() is not a finding.
+write_profile 'l10n: none'
+LN_OUT="$(run_profiled)"
+expect_contains "$LN_OUT" "skipped: user-facing strings" "l10n: none skips the string check"
+
+# strictness: warn — every convention finding drops, and the gate stops blocking.
+write_profile 'strictness: warn'
+SW_OUT="$(run_profiled)"
+expect_exit "$(code_profiled)" 0 "strictness: warn stops convention findings from blocking"
+expect_contains "$SW_OUT" "WARN: no hardcoded colors" "strictness: warn still reports the finding"
+expect_absent   "$SW_OUT" "BLOCKING" "strictness: warn prints no BLOCKING section"
+
+# ...but never for the things that are not house style.
+cat > "$PP/lib/secrets.dart" <<'EOF'
+const apiKey = 'sk_live_abcdef0123456789';
+EOF
+( cd "$PP" && git add -A >/dev/null )
+write_profile 'strictness: warn'
+SEC_OUT="$(run_profiled)"
+expect_exit "$(code_profiled)" 1 "strictness: warn still blocks committed credentials"
+expect_contains "$SEC_OUT" "FAIL: no committed credentials" "credentials block under every profile"
+rm -f "$PP/lib/secrets.dart"
+( cd "$PP" && git add -A >/dev/null )
+
+# A typo must not be read as the default. Enforcing bloc conventions on a project that
+# asked for riverpod, with nothing in the output to say so, is the worst outcome here.
+write_profile 'tokens: theme_extensionn'
+BAD_OUT="$(run_profiled)"
+expect_exit "$(code_profiled)" 2 "an unrecognised profile value exits 2"
+expect_contains "$BAD_OUT" "is not a recognised value" "and names the offending field"
+expect_absent   "$BAD_OUT" "=== Summary ===" "and does not go on to report on the code"
+
+rm -rf "$PP/.claude"
+
+# ---------------------------------------------------------------- reuse and assets
+
+echo "== reuse and assets =="
+RA="$(new_project reuse)" || { echo "flutter create failed"; exit 2; }
+rm -rf "${RA:?}/test"
+mkdir -p "$RA/assets/images" "$RA/lib/core/widgets" "$RA/lib/features/wallet"
+printf 'x' > "$RA/assets/images/logo.png"
+
+for f in core/widgets features/wallet; do
+  cat > "$RA/lib/$f/app_button.dart" <<'EOF'
+import 'package:flutter/material.dart';
+
+class AppButton extends StatelessWidget {
+  const AppButton({super.key});
+
+  @override
+  Widget build(BuildContext context) => const SizedBox();
+}
+EOF
+done
+
+cat > "$RA/lib/main.dart" <<'EOF'
+import 'package:flutter/material.dart';
+
+void main() => runApp(const Logo());
+
+class Logo extends StatelessWidget {
+  const Logo({super.key});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      Image.asset('assets/images/logo.png'),
+      Image.asset('assets/images/missing.png'),
+      const Text('hi', style: TextStyle(fontSize: 14)),
+    ],
+  );
+}
+EOF
+( cd "$RA" && git add -A >/dev/null )
+
+RA_OUT="$(cd "$RA" && bash "$GATE" --skip-tests --all 2>&1)"
+RA_CODE=$(cd "$RA" && bash "$GATE" --skip-tests --all >/dev/null 2>&1; echo $?)
+
+expect_contains "$RA_OUT" "assets/images/missing.png" "flags an asset path that does not resolve"
+expect_absent   "$RA_OUT" "assets/images/logo.png"    "does not flag an asset that exists"
+expect_contains "$RA_OUT" "widget class 'AppButton' is defined in more than one file" \
+                                                      "flags a widget class defined twice"
+expect_contains "$RA_OUT" "WARN: no inline TextStyle" "flags an inline TextStyle"
+
+# All three are new in this release. A new check that blocks would fail projects that
+# passed yesterday, which this repo treats as a breaking change — so they warn.
+expect_exit "$RA_CODE" 0 "the new reuse and asset checks warn rather than block"
+
+# tokens: none has no typography source to point at either.
+mkdir -p "$RA/.claude" && printf 'tokens: none\n' > "$RA/.claude/flutter-profile.yaml"
+RA_TN="$(cd "$RA" && bash "$GATE" --skip-tests --all 2>&1)"
+expect_contains "$RA_TN" "skipped: no inline TextStyle" "tokens: none skips the TextStyle check"
+rm -rf "$RA/.claude"
+
+# Scope: a duplicate the current change is not part of belongs to some other commit.
+# Reporting it here buries the findings that are actually this diff's.
+( cd "$RA" && git add -A >/dev/null \
+  && git -c user.email=t@t -c user.name=t commit -qm widgets >/dev/null )
+printf '\n// touched\n' >> "$RA/lib/main.dart"
+RA_SCOPED="$(cd "$RA" && bash "$GATE" --skip-tests 2>&1)"
+expect_contains "$RA_SCOPED" "1 changed Dart file(s)" "scoped run sees only the changed file"
+expect_absent   "$RA_SCOPED" "widget class 'AppButton'" \
+                "does not report a duplicate the change is not part of"
+expect_contains "$RA_SCOPED" "assets/images/missing.png" \
+                "still reports a bad asset path in the changed file"
+
 # ---------------------------------------------------------------- guards
 
 echo "== guards =="
@@ -169,7 +343,7 @@ BROKEN="$WORK/broken.sh"
 python3 - "$GATE" "$BROKEN" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-needle = 'check_pattern "no print() calls" block'
+needle = 'check_pattern "no print() calls" "$(sev block)"'
 inject = (
     'check_pattern "canary" block \\\n'
     "  'TODO(?!\\()|FIXME' \\\n"
@@ -207,8 +381,9 @@ MISSING="$WORK/missing.sh"
 python3 - "$GATE" "$MISSING" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-needle = 'check_pattern "no print() calls" block'
+needle = 'check_pattern "no print() calls" "$(sev block)"'
 inject = 'check_pattern "sampleless" block \\\n  \'print\\(\' \\\n  ""\n\n'
+assert needle in src, "anchor for the sampleless injection moved"
 open(sys.argv[2], 'w').write(src.replace(needle, inject + needle, 1))
 PY
 MISSING_OUT="$(cd "$PROJ" && bash "$MISSING" --skip-tests 2>&1)"

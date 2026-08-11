@@ -5,6 +5,12 @@ description: Conventions for Flutter golden tests as a design-fidelity guard —
 
 # Golden Tests
 
+> **Profile first.** Read `.claude/flutter-profile.yaml` in the project root. `locales`
+> determines the matrix below — generate an RTL variant when the project ships an RTL
+> locale, and skip it when it does not, rather than generating a variant nobody will ever
+> look at. Field list:
+> `${CLAUDE_PLUGIN_ROOT}/skills/design-tokens/references/flutter-profile.md`.
+
 Visual verification proves a screen matches today. Goldens are what stop it drifting
 tomorrow. Every widget that renders something visible gets one.
 

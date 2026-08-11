@@ -5,6 +5,14 @@ description: Enforces that every color, spacing value, radius, shadow, duration,
 
 # Design Tokens
 
+> **Profile first.** Read `.claude/flutter-profile.yaml` in the project root. `tokens`
+> decides whether this skill applies at all: `theme_extension` (the default, everything
+> below holds), `theme_only` — resolve through `Theme.of(context)` and its `ColorScheme`
+> and `TextTheme` instead of `context.tokens`, `constants` — resolve through the project's
+> constants class, or `none` — the project has no token layer and hardcoded values are not
+> a finding. Under `none`, say once that a token layer would help and then stop asking.
+> Field list: `references/flutter-profile.md`.
+
 Widget code describes structure. It never contains raw visual values. Every color,
 spacing unit, radius, shadow, duration, and text style resolves through the token
 extension, because a hardcoded value looks identical to a correct value in code review
